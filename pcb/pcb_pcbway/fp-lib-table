@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "smartBlind_pcb")(type "KiCad")(uri "/home/felix/Documents/smartBlind/smartBlind_pcb.pretty")(options "")(descr ""))
+)
