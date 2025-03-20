@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <ArduinoMqttClient.h>
 #include <Ewma.h>
+#include <EEPROM.h>
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -8,7 +9,6 @@
 #include "button.h"
 
 // Settings
-#define SLOW_BOOT 0
 #define HOSTNAME "smartBlind1"
 #define WIFI_SSID "FRITZ!Box 7560 2.4G"
 #define WIFI_PASSWORD "20104412208840283021"
@@ -60,16 +60,26 @@ FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
 uint8_t endstopVoltage = 100;
 
+// EEPROM
+#define EEPROM_POSITION 1
+#define EEPROM_POSITION_SET 0
+bool positionSet = false;
+
 // Function Prototypes
 bool stopMotor();
 void connectWifi();
+void writePosition(int32_t position);
+int32_t readPosition();
+bool positionSet();
+void setPositionSet();
 
 void setup()
 {
-  // Init Buttons
+  // Button setup
   btnUP.begin(BUTTON_UP);
   btnDWN.begin(BUTTON_DOWN);
 
+  // Serial setup
   Serial.begin(9600);
   delay(200);
   Serial.println("Serial started");
@@ -81,6 +91,7 @@ void setup()
   // array of pins, count of the pins, how many conversions per pin in one cycle will happen, sampling frequency, callback function
   analogContinuous(adc_pins, adc_pins_count, CONVERSIONS_PER_PIN, 50000, &adcComplete);
 
+  // Wifi setup
   randomSeed(0);
   connectWifi();
 
@@ -99,6 +110,22 @@ void setup()
 
     stepper->setSpeedInUs(2500); // the parameter is us/step !!!
     stepper->setAcceleration(100000);
+  }
+
+  // Stepper position setup
+  if (readPosition() == 0)
+  {
+    stepper->runBackward();
+    
+    while (true)
+    {
+      if(stopMotor())
+      {
+        stepper->stopMove();
+        
+        writePosition(stepper->getCurrentPosition())
+      }
+    }
   }
 }
 
@@ -133,6 +160,7 @@ void loop()
     if (stopMotor())
     {
       analogContinuousStop();
+      stepper->setPositionAfterCommandsCompleted()
       stepper->stopMove();
       step = STATE_NOTHING;
     }
@@ -234,4 +262,26 @@ void connectWifi()
     Serial.print(".");
     connect_timeout--;
   }
+}
+
+void writePosition(int32_t position) {
+  EEPROM.write(EEPROM_POSITION, (position >> 24) & 0xFF);
+  EEPROM.write(EEPROM_POSITION + 1, (position >>16) & 0xFF);
+  EEPROM.write(EEPROM_POSITION + 2, (position >> 8) & 0xFF);
+  EEPROM.write(EEPROM_POSITION + 3, position & 0xFF);
+}
+
+int32_t readPosition() {
+  return ((int32_t)EEPROM.read(EEPROM_POSITION) << 24) +
+         ((int32_t)EEPROM.read(EEPROM_POSITION + 1) << 16) +
+         ((int32_t)EEPROM.read(EEPROM_POSITION + 2) << 8) +
+         (int32_t)EEPROM.read(EEPROM_POSITION + 3);
+}
+
+void setPositionSet() {
+  EEPROM.write(EEPROM_POSITION_SET, 0xFF)
+}
+
+bool positionSet() {
+  return (EEPROM.read(EEPROM_POSITION_SET) != 0);
 }
