@@ -85,9 +85,9 @@ bool positionSet = false;
 bool stopMotor();
 void connectWifi();
 bool setBlindPosition(int eepromLocation, int32_t position);
-int32_t getBlindPosition(int32_t* blindPosition, int eepromLocation);
-bool setBlindState(uint8_t state, bool unset);
-uint8_t getBlindState(uint8_t state);
+bool getBlindPosition(int32_t* blindPosition, int eepromLocation);
+bool setBlindState(uint8_t state, bool value);
+bool getBlindState(uint8_t state);
 
 void setup()
 {
@@ -107,13 +107,18 @@ void setup()
   // array of pins, count of the pins, how many conversions per pin in one cycle will happen, sampling frequency, callback function
   analogContinuous(adc_pins, adc_pins_count, CONVERSIONS_PER_PIN, 50000, &adcComplete);
 
-  // Wifi setup
   randomSeed(0);
-  connectWifi();
+
+  // Wifi setup
+  if (getBlindState(STATE_FIRST_RUN_DONE))
+  {
+    connectWifi();
+  }
 
   // Stepper setup
   engine.init();
   stepper = engine.stepperConnectToPin(STEP_PIN);
+
   if (stepper)
   {
     stepper->setDirectionPin(DIR_PIN);
@@ -129,19 +134,28 @@ void setup()
   }
 
   // Stepper position setup
-  if (readPosition() == 0 || (digitalRead(BUTTON_DOWN) && digitalRead(BUTTON_DOWN)))
+  if (!getBlindState(STATE_FIRST_RUN_DONE) || (digitalRead(BUTTON_DOWN) && digitalRead(BUTTON_DOWN)))
   {
     stepper->runBackward();
-    
     while (true)
     {
       if(stopMotor())
       {
         stepper->stopMove();
-        
-        writePosition(stepper->getCurrentPosition())
+        stepper->setCurrentPosition(0);
+        break;
       }
-      delay(50);
+    }
+
+    stepper->runForward();
+    while (true)
+    {
+      if(stopMotor() || btnDWN.debounce() || btnUP.debounce())
+      {
+        stepper->stopMove();
+        setBlindPosition(EEPROM_POSITION_DOWN, stepper->getCurrentPosition());
+        break;
+      }
     }
   }
 }
@@ -151,8 +165,7 @@ void loop()
 {
   static uint8_t step = STATE_NOTHING;
 
-  switch (step)
-  {
+  switch (step){
   case STATE_NOTHING:
     if (btnUP.debounce())
     {
@@ -178,7 +191,6 @@ void loop()
     if (stopMotor())
     {
       analogContinuousStop();
-      stepper->setPositionAfterCommandsCompleted()
       stepper->stopMove();
       step = STATE_NOTHING;
     }
@@ -195,7 +207,6 @@ void loop()
     {
       analogContinuousStop();
       stepper->stopMove();
-      stepper->move(-2000);
       step = STATE_NOTHING;
     }
     break;
@@ -227,10 +238,6 @@ bool stopMotor()
       uint8_t prevIndex = writeIndex - LOOKBACK_DISTANCE < 0 ? writeIndex - LOOKBACK_DISTANCE + 10 : writeIndex - LOOKBACK_DISTANCE;
 
       float voltageDelta = meassurements[writeIndex] - meassurements[prevIndex];
-      Serial.print(voltageDelta);
-      Serial.print(", ");
-      Serial.println(meassurements[writeIndex]);
-
       if (voltageDelta > 10)
       {
         if (meassurements[writeIndex] > 250)
@@ -238,8 +245,6 @@ bool stopMotor()
           stopped = true;
         }
       }
-
-      // Serial.printf("\n %.1f", meassurements[writeIndex]);
 
       if (writeIndex >= 9)
       {
@@ -293,37 +298,20 @@ bool setBlindPosition(int eepromLocation, int32_t position)
     EEPROM.write(eepromLocation + 1, (position >>16) & 0xFF);
     EEPROM.write(eepromLocation + 2, (position >> 8) & 0xFF);
     EEPROM.write(eepromLocation + 3, position & 0xFF);
-    return true;
-  } else {
-    return false;
-  }
-}
 
-// read blind position from eeprom
-bool getBlindPosition(int32_t* blindPosition, int eepromLocation)
-{
-  // eepromLocation is the eeprom location of the blind position to be written
-  if (blindPosition && eepromLocation < 2044) {
-    blindPosition = 
-      ((int32_t)EEPROM.read(eepromLocation) << 24) +
-      ((int32_t)EEPROM.read(eepromLocation + 1) << 16) +
-      ((int32_t)EEPROM.read(eepromLocation + 2) << 8) +
-      (int32_t)EEPROM.read(eepromLocation + 3);
-    return true;
-  } else {
-    return false;
-  };
-}
-
-// write blind state to eeprom
-bool setBlindState(uint8_t state, bool unset)
-{
-  if (state < 32) {
-    uint8_t currentState = EEPROM.read(EEPROM_BLIND_STATE + (state/8));
-    if (unset) {
-      EEPROM.write(EEPROM_BLIND_STATE + (state/8), currentState & ~(1<<(state % 8)));
-    } else {
-      EEPROM.write(EEPROM_BLIND_STATE + (state/8), currentState | (1<<(state % 8)));
+    switch (eepromLocation)
+    {
+    case EEPROM_POSITION_DOWN:
+      setBlindState(STATE_POSITION_DOWN_SET, true);
+      break;
+    case EEPROM_POSITION_UP:
+      setBlindState(STATE_POSITION_UP_SET, true);
+      break;
+    case EEPROM_POSITION_LAST:
+      setBlindPosition(STATE_POSITION_LAST_SET, true);
+      break;
+    default:
+      break;
     }
     return true;
   } else {
@@ -331,9 +319,40 @@ bool setBlindState(uint8_t state, bool unset)
   }
 }
 
-// read blind state to eeprom
-uint8_t getBlindState(uint8_t state)
+// read blind position from eeprom
+int32_t getBlindPosition(int eepromLocation)
+{
+  // eepromLocation is the eeprom location of the blind position to be written
+  if (eepromLocation < 2044) {
+    return ((int32_t)EEPROM.read(eepromLocation) << 24) +
+      ((int32_t)EEPROM.read(eepromLocation + 1) << 16) +
+      ((int32_t)EEPROM.read(eepromLocation + 2) << 8) +
+      (int32_t)EEPROM.read(eepromLocation + 3);
+  } else {
+    return -1;
+  };
+}
+
+// write blind state to eeprom
+bool setBlindState(uint8_t state, bool value)
+{
+  if (state < 32) {
+    uint8_t currentState = EEPROM.read(EEPROM_BLIND_STATE + (state/8));
+    if (value && !(currentState & (1<<(state % 8)))) {
+      EEPROM.write(EEPROM_BLIND_STATE + (state/8), currentState | (1<<(state % 8)));
+    }
+    if (!value && (currentState & (1<<(state % 8)))) {
+      EEPROM.write(EEPROM_BLIND_STATE + (state/8), currentState & ~(1<<(state % 8)));
+    }
+    return true;
+  } else {
+    return false;
+  }
+}
+
+// read blind state from eeprom
+bool getBlindState(uint8_t state)
 {
   uint8_t currentState = EEPROM.read(EEPROM_BLIND_STATE + (state/8));
-  return (currentState & (1<<(state % 8))) != 0;
+  return (currentState & (1<<(state % 8)));
 }
